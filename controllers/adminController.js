@@ -92,11 +92,36 @@ const updateUser = async (req, res) => {
     }
 };
 
+const getAllMeetings = async (req, res) => {
+    try {
+        const meetings = await Meeting.find({}).populate('hostId', 'name email');
+        res.json(meetings);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+const deleteMeeting = async (req, res) => {
+    try {
+        const meeting = await Meeting.findById(req.params.id);
+        if (meeting) {
+            await meeting.deleteOne();
+            res.json({ message: 'Meeting deleted successfully' });
+        } else {
+            res.status(404).json({ message: 'Meeting not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 module.exports = {
     getStats,
     getAllUsers,
     updateUserRole,
     toggleBlockUser,
     createUser,
-    updateUser
+    updateUser,
+    getAllMeetings,
+    deleteMeeting
 };

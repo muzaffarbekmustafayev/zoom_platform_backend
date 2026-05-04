@@ -157,8 +157,26 @@ const socketHandler = (server) => {
                 _id: newMessage._id,
                 text: message, 
                 userName, 
+                senderId: userId || socket.id, // Emitting senderId to client
                 time: new Date().toLocaleTimeString() 
             });
+        });
+
+        socket.on('edit-chat-message', async ({ roomId, messageId, newText, userId }) => {
+            const message = await Message.findById(messageId);
+            if (message && (String(message.senderId) === String(userId) || String(message.senderId) === socket.id)) {
+                message.text = newText;
+                await message.save();
+                io.to(roomId).emit('chat-message-edited', { _id: messageId, newText });
+            }
+        });
+
+        socket.on('delete-chat-message', async ({ roomId, messageId, userId }) => {
+            const message = await Message.findById(messageId);
+            if (message && (String(message.senderId) === String(userId) || String(message.senderId) === socket.id)) {
+                await message.deleteOne();
+                io.to(roomId).emit('chat-message-deleted', { _id: messageId });
+            }
         });
 
         socket.on('start-screen-share', ({ roomId, userId, userName, role }) => {
