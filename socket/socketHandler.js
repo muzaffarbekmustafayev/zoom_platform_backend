@@ -193,17 +193,6 @@ const socketHandler = (server, opts = {}) => {
                 return;
             }
 
-            const previouslyAdmitted = admittedUsers[roomID]?.has(userId);
-            if (meeting.settings?.isWaitingRoomEnabled && role === 'participant' && !previouslyAdmitted) {
-                if (!waitingRoom[roomID]) waitingRoom[roomID] = [];
-                if (!waitingRoom[roomID].find(u => u.userId === userId)) {
-                    waitingRoom[roomID].push({ socketId: socket.id, userId, userName, isGuest });
-                }
-                socket.emit('waiting-room');
-                broadcastWaitingRoom(roomID);
-                return;
-            }
-
             await admitUser(socket, roomID, userId, userName, role, meeting);
         });
 
