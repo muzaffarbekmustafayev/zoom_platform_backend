@@ -2,72 +2,79 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+
+dotenv.config();
+
+const { validateEnv, getAllowedOrigins } = require('./config/env');
+validateEnv();
+
 const connectDB = require('./config/db');
 const userRoutes = require('./routes/userRoutes');
 const meetingRoutes = require('./routes/meetingRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const socketHandler = require('./socket/socketHandler');
+const { notFound, errorHandler } = require('./middleware/errorMiddleware');
+const { apiLimiter } = require('./middleware/rateLimiters');
 
-dotenv.config();
 connectDB();
 
 const app = express();
-app.use(express.json());
+app.set('trust proxy', 1);
 
-const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://zoom.sampc.uz',
-    'https://zoom.sampc.uz'
-];
-
-app.use(cors({
+const allowedOrigins = getAllowedOrigins();
+const corsOptions = {
     origin: function (origin, callback) {
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+            return callback(null, true);
         }
+        return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
-}));
+};
+
+app.use(helmet());
+app.use(cors(corsOptions));
+app.use(compression());
+app.use(express.json({ limit: process.env.BODY_LIMIT || '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.BODY_LIMIT || '100kb' }));
+
+if (process.env.NODE_ENV !== 'production') {
+    app.use(morgan('dev'));
+} else {
+    app.use(morgan('combined'));
+}
+
+app.use('/api/', apiLimiter);
+
+app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 app.use('/api/users', userRoutes);
 app.use('/api/meetings', meetingRoutes);
 app.use('/api/admin', adminRoutes);
 
-const server = http.createServer(app);
+app.use(notFound);
+app.use(errorHandler);
 
-// Initialize Socket.io
-socketHandler(server);
+const server = http.createServer(app);
+socketHandler(server, { allowedOrigins });
 
 const PORT = process.env.PORT || 5005;
 server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    
-    // Log all routes with a small delay to ensure initialization
-    setTimeout(() => {
-        console.log("\n--- REGISTERED ROUTES ---");
-        function printRoutes(stack, prefix = '') {
-            stack.forEach((middleware) => {
-                if (middleware.route) { // Basic route
-                    const methods = Object.keys(middleware.route.methods).join(',').toUpperCase();
-                    console.log(`${methods.padEnd(7)} ${prefix}${middleware.route.path}`);
-                } else if (middleware.name === 'router') { // Router middleware
-                    const newPrefix = prefix + (middleware.regexp.source
-                        .replace('\\/?(?=\\/|$)', '')
-                        .replace('^\\', '')
-                        .replace('\\/', '/'));
-                    printRoutes(middleware.handle.stack, newPrefix);
-                }
-            });
-        }
+    console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
+});
 
-        if (app._router && app._router.stack) {
-            printRoutes(app._router.stack);
-        }
-        console.log("-------------------------\n");
-    }, 100);
+const shutdown = (signal) => {
+    console.log(`Received ${signal}, shutting down`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 10000).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled rejection:', err);
 });

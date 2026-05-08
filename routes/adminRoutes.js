@@ -1,16 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const { getStats, getAllUsers, updateUserRole, toggleBlockUser, createUser, updateUser, getAllMeetings, deleteMeeting } = require('../controllers/adminController');
+const {
+    getStats, getAllUsers, updateUserRole, toggleBlockUser, createUser,
+    updateUser, getAllMeetings, deleteMeeting
+} = require('../controllers/adminController');
 const { protect, admin } = require('../middleware/authMiddleware');
+const { validate, validateObjectId } = require('../middleware/validate');
+const {
+    adminCreateUserSchema, adminUpdateUserSchema, updateRoleSchema
+} = require('../validators/userValidators');
 
-router.get('/stats', protect, admin, getStats);
-router.get('/users', protect, admin, getAllUsers);
-router.post('/users', protect, admin, createUser);
-router.put('/users/:id', protect, admin, updateUser);
-router.put('/users/:id/role', protect, admin, updateUserRole);
-router.put('/users/:id/block', protect, admin, toggleBlockUser);
+router.use(protect, admin);
 
-router.get('/meetings', protect, admin, getAllMeetings);
-router.delete('/meetings/:id', protect, admin, deleteMeeting);
+router.get('/stats', getStats);
+router.get('/users', getAllUsers);
+router.post('/users', validate(adminCreateUserSchema), createUser);
+router.put('/users/:id', validateObjectId('id'), validate(adminUpdateUserSchema), updateUser);
+router.put('/users/:id/role', validateObjectId('id'), validate(updateRoleSchema), updateUserRole);
+router.put('/users/:id/block', validateObjectId('id'), toggleBlockUser);
+
+router.get('/meetings', getAllMeetings);
+router.delete('/meetings/:id', validateObjectId('id'), deleteMeeting);
 
 module.exports = router;

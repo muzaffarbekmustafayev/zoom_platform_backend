@@ -1,16 +1,29 @@
 const express = require('express');
-const { registerUser, authUser, guestLogin, getUserProfile, updateUserProfile, forgotPassword, googleAuth, followUser, unfollowUser, searchUsers } = require('../controllers/userController');
+const {
+    registerUser, authUser, guestLogin, getUserProfile, updateUserProfile,
+    forgotPassword, googleAuth, followUser, unfollowUser, searchUsers
+} = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
+const { validate, validateObjectId } = require('../middleware/validate');
+const { authLimiter, passwordResetLimiter } = require('../middleware/rateLimiters');
+const {
+    registerSchema, loginSchema, guestLoginSchema, forgotPasswordSchema, updateProfileSchema
+} = require('../validators/userValidators');
+
 const router = express.Router();
 
-router.post('/register', registerUser);
-router.post('/login', authUser);
-router.post('/guest-login', guestLogin);
-router.route('/profile').get(protect, getUserProfile).put(protect, updateUserProfile);
+router.post('/register', authLimiter, validate(registerSchema), registerUser);
+router.post('/login', authLimiter, validate(loginSchema), authUser);
+router.post('/guest-login', authLimiter, validate(guestLoginSchema), guestLogin);
+router.post('/forgot-password', passwordResetLimiter, validate(forgotPasswordSchema), forgotPassword);
+router.post('/google-auth', authLimiter, googleAuth);
+
+router.route('/profile')
+    .get(protect, getUserProfile)
+    .put(protect, validate(updateProfileSchema), updateUserProfile);
+
 router.get('/search', protect, searchUsers);
-router.post('/forgot-password', forgotPassword);
-router.post('/google-auth', googleAuth);
-router.post('/follow/:id', protect, followUser);
-router.post('/unfollow/:id', protect, unfollowUser);
+router.post('/follow/:id', protect, validateObjectId('id'), followUser);
+router.post('/unfollow/:id', protect, validateObjectId('id'), unfollowUser);
 
 module.exports = router;

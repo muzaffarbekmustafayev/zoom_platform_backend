@@ -1,284 +1,225 @@
+const asyncHandler = require('express-async-handler');
+const crypto = require('crypto');
 const User = require('../models/userModel');
 const generateToken = require('../config/generateToken');
+const escapeRegex = require('../utils/escapeRegex');
 
-const registerUser = async (req, res) => {
-    try {
-        const { name, email, password, role, username } = req.body;
-
-        if (!name || !email || !password || !username) {
-            return res.status(400).json({ message: 'Please enter all fields including username' });
-        }
-
-        const userExists = await User.findOne({ $or: [{ email }, { username }] });
-
-        if (userExists) {
-            return res.status(400).json({ message: 'User with this email or username already exists' });
-        }
-
-        const user = await User.create({
-            name,
-            email,
-            username,
-            password,
-            role: role || 'user'
-        });
-
-        if (user) {
-            return res.status(201).json({
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                username: user.username,
-                role: user.role,
-                avatar: user.avatar,
-                token: generateToken(user._id)
-            });
-        } else {
-            return res.status(400).json({ message: 'Invalid user data received' });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
-    }
+const sendUser = (user, withToken = false) => {
+    const payload = {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        avatar: user.avatar,
+        bio: user.bio,
+        links: user.links || [],
+        contactsCount: user.contactsCount,
+        followersCount: user.followersCount
+    };
+    if (withToken) payload.token = generateToken(user._id);
+    return payload;
 };
 
-const authUser = async (req, res) => {
-    try {
-        const { email, password } = req.body;
+const registerUser = asyncHandler(async (req, res) => {
+    const { name, email, password, role, username } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Please provide email and password' });
-        }
-
-        const user = await User.findOne({ email });
-
-        if (user && (await user.matchPassword(password))) {
-            if (user.isBlocked) {
-                return res.status(403).json({ message: 'Your account is blocked by administration' });
-            }
-
-            return res.json({
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                avatar: user.avatar,
-                token: generateToken(user._id)
-            });
-        } else {
-            return res.status(401).json({ message: 'Invalid email or password' });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    const userExists = await User.findOne({ $or: [{ email }, { username }] });
+    if (userExists) {
+        res.status(409);
+        throw new Error('User with this email or username already exists');
     }
-};
 
-const guestLogin = async (req, res) => {
-    try {
-        const { name, email } = req.body;
+    const safeRole = role === 'admin' ? 'user' : (role || 'user');
 
-        if (!name || !email) {
-            return res.status(400).json({ message: 'Please provide name and email for guest login' });
-        }
+    const user = await User.create({
+        name,
+        email,
+        username,
+        password,
+        role: safeRole
+    });
 
-        // Check if guest already exists
-        let guestUser = await User.findOne({ email, role: 'guest' });
-
-        if (!guestUser) {
-            // Create a new guest user
-            guestUser = await User.create({
-                name,
-                email,
-                role: 'guest',
-                username: `guest_${Date.now()}` // Generate unique username for guest
-            });
-        }
-
-        return res.json({
-            _id: guestUser._id,
-            name: guestUser.name,
-            email: guestUser.email,
-            role: guestUser.role,
-            avatar: guestUser.avatar,
-            token: generateToken(guestUser._id)
-        });
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    if (!user) {
+        res.status(400);
+        throw new Error('Invalid user data received');
     }
-};
+    return res.status(201).json(sendUser(user, true));
+});
 
-const getUserProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.user._id)
-            .populate('followers', '_id name email avatar')
-            .populate('following', '_id name email avatar');
+const authUser = asyncHandler(async (req, res) => {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
 
-        if (user) {
-            return res.json({
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                username: user.username,
-                role: user.role,
-                avatar: user.avatar,
-                bio: user.bio,
-                links: user.links || [],
-                contactsCount: user.contactsCount,
-                followersCount: user.followersCount,
-                followers: user.followers || [],
-                following: user.following || []
-            });
-        } else {
-            return res.status(404).json({ message: 'User not found' });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    if (!user || !(await user.matchPassword(password))) {
+        res.status(401);
+        throw new Error('Invalid email or password');
     }
-};
-
-
-const updateUserProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.user._id);
-
-        if (user) {
-            user.name = req.body.name || user.name;
-            user.bio = req.body.bio !== undefined ? req.body.bio : user.bio;
-            if (req.body.links && Array.isArray(req.body.links)) {
-                user.links = req.body.links.slice(0, 5); // Max 5 links
-            }
-            if (req.body.password) {
-                user.password = req.body.password;
-            }
-
-            const updatedUser = await user.save();
-
-            return res.json({
-                _id: updatedUser._id,
-                name: updatedUser.name,
-                email: updatedUser.email,
-                username: updatedUser.username,
-                role: updatedUser.role,
-                avatar: updatedUser.avatar,
-                bio: updatedUser.bio,
-                links: updatedUser.links,
-                contactsCount: updatedUser.contactsCount,
-                followersCount: updatedUser.followersCount,
-                token: generateToken(updatedUser._id)
-            });
-        } else {
-            return res.status(404).json({ message: 'User not found' });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    if (user.isBlocked) {
+        res.status(403);
+        throw new Error('Your account is blocked by administration');
     }
-};
 
-const forgotPassword = async (req, res) => {
-    try {
-        const { email } = req.body;
-        const user = await User.findOne({ email });
+    return res.json(sendUser(user, true));
+});
 
-        if (!user) {
-            return res.status(404).json({ message: 'User with this email does not exist' });
-        }
+const guestLogin = asyncHandler(async (req, res) => {
+    const { name, email } = req.body;
+    // Always create a fresh guest record. Synthesize a unique email so a
+    // guest can never inherit a previous guest user's identity by reusing
+    // an arbitrary email address.
+    const rand = crypto.randomBytes(6).toString('hex');
+    const synthEmail = `guest+${Date.now()}.${rand}@guest.local`;
 
-        // Normally, generate a token, save to DB, and send email here.
-        // For demonstration, we just return success.
-        return res.status(200).json({ message: 'Reset link sent to your email' });
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    const guestUser = await User.create({
+        name,
+        email: synthEmail,
+        role: 'guest',
+        username: `guest_${Date.now()}_${rand}`,
+        bio: email ? `Guest contact: ${email}` : undefined
+    });
+
+    return res.json(sendUser(guestUser, true));
+});
+
+const getUserProfile = asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id)
+        .populate('followers', '_id name email avatar')
+        .populate('following', '_id name email avatar');
+
+    if (!user) {
+        res.status(404);
+        throw new Error('User not found');
     }
-};
+    return res.json({
+        ...sendUser(user, false),
+        followers: user.followers || [],
+        following: user.following || []
+    });
+});
 
-const googleAuth = async (req, res) => {
-    try {
-        // Mock Google Auth logic
-        return res.status(501).json({ message: 'Google Authentication requires real Client ID implementation.' });
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+const updateUserProfile = asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+        res.status(404);
+        throw new Error('User not found');
     }
-};
 
-const followUser = async (req, res) => {
-    try {
-        const userToFollowId = req.params.id;
-        const currentUserId = req.user._id;
+    if (req.body.name !== undefined) user.name = req.body.name;
+    if (req.body.bio !== undefined) user.bio = req.body.bio;
+    if (Array.isArray(req.body.links)) user.links = req.body.links.slice(0, 5);
 
-        if (userToFollowId === currentUserId.toString()) {
-            return res.status(400).json({ message: "You cannot follow yourself" });
+    if (req.body.password) {
+        const ok = await user.matchPassword(req.body.currentPassword || '');
+        if (!ok) {
+            res.status(400);
+            throw new Error('Current password is incorrect');
         }
-
-        const userToFollow = await User.findById(userToFollowId);
-        const currentUser = await User.findById(currentUserId);
-
-        if (!userToFollow || !currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
-
-        if (!userToFollow.followers.includes(currentUserId)) {
-            userToFollow.followers.push(currentUserId);
-            userToFollow.followersCount = userToFollow.followers.length;
-            await userToFollow.save();
-
-            currentUser.following.push(userToFollowId);
-            currentUser.contactsCount = currentUser.following.length;
-            await currentUser.save();
-
-            return res.json({ message: "Successfully followed user", followersCount: userToFollow.followersCount });
-        } else {
-            return res.status(400).json({ message: "You are already following this user" });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+        user.password = req.body.password;
     }
-};
 
-const unfollowUser = async (req, res) => {
-    try {
-        const userToUnfollowId = req.params.id;
-        const currentUserId = req.user._id;
+    const updatedUser = await user.save();
+    return res.json(sendUser(updatedUser, true));
+});
 
-        const userToUnfollow = await User.findById(userToUnfollowId);
-        const currentUser = await User.findById(currentUserId);
+const forgotPassword = asyncHandler(async (req, res) => {
+    // Email-sending is not implemented. We respond identically whether the
+    // email exists or not to avoid user enumeration.
+    res.status(200).json({
+        message: 'If an account exists for this email, a reset link has been sent'
+    });
+});
 
-        if (!userToUnfollow || !currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+const googleAuth = asyncHandler(async (req, res) => {
+    res.status(501).json({ message: 'Google Authentication requires real Client ID implementation.' });
+});
 
-        if (userToUnfollow.followers.includes(currentUserId)) {
-            userToUnfollow.followers = userToUnfollow.followers.filter(id => id.toString() !== currentUserId.toString());
-            userToUnfollow.followersCount = userToUnfollow.followers.length;
-            await userToUnfollow.save();
+const followUser = asyncHandler(async (req, res) => {
+    const userToFollowId = req.params.id;
+    const currentUserId = req.user._id;
 
-            currentUser.following = currentUser.following.filter(id => id.toString() !== userToUnfollowId.toString());
-            currentUser.contactsCount = currentUser.following.length;
-            await currentUser.save();
-
-            return res.json({ message: "Successfully unfollowed user", followersCount: userToUnfollow.followersCount });
-        } else {
-            return res.status(400).json({ message: "You are not following this user" });
-        }
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    if (userToFollowId === currentUserId.toString()) {
+        res.status(400);
+        throw new Error('You cannot follow yourself');
     }
-};
 
-const searchUsers = async (req, res) => {
-    try {
-        const query = req.query.q;
-        if (!query) {
-            return res.json([]);
-        }
-        const users = await User.find({
-            $or: [
-                { username: { $regex: query, $options: 'i' } },
-                { name: { $regex: query, $options: 'i' } }
-            ]
-        }).select('_id name email username avatar role');
-        return res.json(users);
-    } catch (error) {
-        return res.status(500).json({ message: error.message });
+    const userToFollow = await User.findById(userToFollowId);
+    if (!userToFollow) {
+        res.status(404);
+        throw new Error('User not found');
     }
-};
 
-module.exports = { registerUser, authUser, guestLogin, getUserProfile, updateUserProfile, forgotPassword, googleAuth, followUser, unfollowUser, searchUsers };
+    const followResult = await User.updateOne(
+        { _id: userToFollowId, followers: { $ne: currentUserId } },
+        { $push: { followers: currentUserId }, $inc: { followersCount: 1 } }
+    );
+    if (followResult.modifiedCount === 0) {
+        res.status(400);
+        throw new Error('You are already following this user');
+    }
+    await User.updateOne(
+        { _id: currentUserId, following: { $ne: userToFollowId } },
+        { $push: { following: userToFollowId }, $inc: { contactsCount: 1 } }
+    );
+
+    const fresh = await User.findById(userToFollowId).select('followersCount');
+    return res.json({ message: 'Successfully followed user', followersCount: fresh.followersCount });
+});
+
+const unfollowUser = asyncHandler(async (req, res) => {
+    const userToUnfollowId = req.params.id;
+    const currentUserId = req.user._id;
+
+    const userToUnfollow = await User.findById(userToUnfollowId);
+    if (!userToUnfollow) {
+        res.status(404);
+        throw new Error('User not found');
+    }
+
+    const result = await User.updateOne(
+        { _id: userToUnfollowId, followers: currentUserId },
+        { $pull: { followers: currentUserId }, $inc: { followersCount: -1 } }
+    );
+    if (result.modifiedCount === 0) {
+        res.status(400);
+        throw new Error('You are not following this user');
+    }
+    await User.updateOne(
+        { _id: currentUserId, following: userToUnfollowId },
+        { $pull: { following: userToUnfollowId }, $inc: { contactsCount: -1 } }
+    );
+
+    const fresh = await User.findById(userToUnfollowId).select('followersCount');
+    return res.json({ message: 'Successfully unfollowed user', followersCount: fresh.followersCount });
+});
+
+const searchUsers = asyncHandler(async (req, res) => {
+    const raw = (req.query.q || '').toString().trim();
+    if (!raw || raw.length < 2) return res.json([]);
+
+    const safe = escapeRegex(raw).slice(0, 60);
+    const users = await User.find({
+        _id: { $ne: req.user._id },
+        role: { $ne: 'guest' },
+        $or: [
+            { username: { $regex: safe, $options: 'i' } },
+            { name: { $regex: safe, $options: 'i' } }
+        ]
+    })
+        .select('_id name email username avatar role')
+        .limit(20);
+    return res.json(users);
+});
+
+module.exports = {
+    registerUser,
+    authUser,
+    guestLogin,
+    getUserProfile,
+    updateUserProfile,
+    forgotPassword,
+    googleAuth,
+    followUser,
+    unfollowUser,
+    searchUsers
+};
